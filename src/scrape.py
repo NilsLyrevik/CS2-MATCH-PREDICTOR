@@ -1,103 +1,79 @@
-import requests
+from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 import json
 import time
 
-BASE_URL = "https://www.hltv.org"
-RESULTS_URL = "https://www.hltv.org/stats/matches"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/117.0.0.0 Safari/537.36"
-    ),
-    "Referer": "https://www.hltv.org/",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Connection": "keep-alive"
-}
-
+RESULTS_URL = "https://www.hltv.org/stats/matches?csVersion=CS2"
 
 def get_soup(url: str) -> BeautifulSoup:
-    r = requests.get(url, headers=HEADERS, timeout=10)
-    r.raise_for_status()
-    time.sleep(1.5)
-    return BeautifulSoup(r.text, "html.parser")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False, slow_mo=500)  # headless=False to see it
+        page = browser.new_page()
+        page.goto(url, timeout=60000)
 
-def parse_match_card(card):
-    match = {}
-    link = card.find("a", class_="a-reset")
-    if not link:
-        return None
+        # Wait for network to be idle (no XHR in flight)
+        page.wait_for_load_state("networkidle")
 
-    match["match_url"] = BASE_URL + link["href"]
-    teams = card.find_all("div", class_="team")
-    if len(teams) == 2:
-        match["team1"] = teams[0].text.strip()
-        match["team2"] = teams[1].text.strip()
+        # Save screenshot + page content for inspection
+        page.screenshot(path="debug.png", full_page=True)
+        html = page.content()
+        with open("debug.html", "w", encoding="utf-8") as f:
+            f.write(html)
 
-    event = card.find("span", class_="event-name")
-    if event:
-        match["event"] = event.text.strip()
+        print("Saved debug.png and debug.html")
+        # keep browser open a bit so you can look
+        time.sleep(5)
 
-    date = card.find("div", class_="date")
-    if date:
-        match["date"] = date.text.strip()
+        browser.close()
 
-    return match
+    return BeautifulSoup(html, "html.parser")
 
-def parse_match_details(match):
-    soup = get_soup(match["match_url"])
 
-    # Match format (e.g., Best of 3)
-    format_tag = soup.find("div", class_="standard-box veto-box")
-    if format_tag and "Best of" in format_tag.text:
-        match["format"] = [line for line in format_tag.text.split("\n") if "Best of" in line][0].strip()
-    else:
-        match["format"] = "Unknown"
+def parse_matches(soup):
+    matches = []
+    rows = soup.select("table.stats-table tbody tr")
+    for row in rows:
+        try:
+            date = row.select_one("td.date-col div.time").get_text(strip=True)
 
-    # Maps & scores
-    maps = []
-    map_rows = soup.find_all("div", class_="mapholder")
-    for row in map_rows:
-        map_name_tag = row.find("div", class_="mapname")
-        score_tag = row.find("div", class_="results-center")
-        if not map_name_tag or not score_tag:
-            continue
-        map_name = map_name_tag.text.strip()
-        scores = score_tag.find_all("div", class_="results-team-score")
-        if len(scores) == 2:
-            team1_score = int(scores[0].text.strip())
-            team2_score = int(scores[1].text.strip())
-            maps.append({
-                "map": map_name,
+            team1_col, team2_col = row.select("td.team-col")
+            team1 = team1_col.select_one("a").get_text(strip=True)
+            team1_score = int(team1_col.select_one("span.score").get_text(strip=True).strip("()"))
+
+            team2 = team2_col.select_one("a").get_text(strip=True)
+            team2_score = int(team2_col.select_one("span.score").get_text(strip=True).strip("()"))
+
+            map_played = row.select_one("td.statsDetail div.dynamic-map-name-full").get_text(strip=True)
+            event = row.select_one("td.event-col a").get_text(strip=True)
+
+            matches.append({
+                "date": date,
+                "team1": team1,
                 "team1_score": team1_score,
-                "team2_score": team2_score
+                "team2": team2,
+                "team2_score": team2_score,
+                "map": map_played,
+                "event": event,
             })
-
-    match["maps"] = maps
-    return match
+        except Exception as e:
+            print(f"Skipping row due to parse error: {e}")
+            continue
+    return matches
 
 def scrape_matches(pages=1):
     all_matches = []
     for i in range(pages):
         print(f"Scraping page {i+1}/{pages} ...")
-        soup = get_soup(f"{RESULTS_URL}?offset={i*100}")
-        cards = soup.find_all("div", class_="result-con")
-        for card in cards:
-            m = parse_match_card(card)
-            if m:
-                try:
-                    m = parse_match_details(m)
-                except Exception as e:
-                    print(f"Error parsing {m['match_url']}: {e}")
-                all_matches.append(m)
-                time.sleep(2)  # be nice to HLTV (don't get blocked)
+        url = f"{RESULTS_URL}&offset={i * 50}"
+        soup = get_soup(url)
+        batch = parse_matches(soup)
+        print(f"  Found {len(batch)} matches on page {i+1}.")
+        all_matches.extend(batch)
+        time.sleep(2)
     return all_matches
 
 if __name__ == "__main__":
-    matches = scrape_matches(pages=1)  # scrape 100 matches
+    matches = scrape_matches(pages=2)
     with open("matches.json", "w", encoding="utf-8") as f:
         json.dump(matches, f, indent=2, ensure_ascii=False)
     print(f"Saved {len(matches)} matches to matches.json")
