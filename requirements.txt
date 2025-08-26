@@ -1,5 +1,6 @@
 requests==2.32.3
 beautifulsoup4==4.12.3
+playwright==1.48.0
 pandas==2.2.2
 scikit-learn==1.5.1
 torch==2.4.1
