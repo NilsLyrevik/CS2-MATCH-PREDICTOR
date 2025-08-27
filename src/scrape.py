@@ -3,11 +3,11 @@ from bs4 import BeautifulSoup
 import json
 import time
 
-RESULTS_URL = "https://www.hltv.org/stats/matches?csVersion=CS2"
+RESULTS_URL = "https://www.hltv.org/stats/matches?csversion=CS2&startdate=2024-08-27&endDate=2025-08-27&maps=de_ancient&maps=de_dust2&maps=de_inferno&maps=de_mirage&maps=de_nuke&maps=de_overpass&maps=de_train&rankingfilter=Top50"
 
 def get_soup(url: str) -> BeautifulSoup:
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False, slow_mo=500)  # headless=False to see it
+        browser = p.firefox.launch(headless=False, slow_mo=5)  # headless=False to see it
         page = browser.new_page()
         page.goto(url, timeout=60000)
 
@@ -73,7 +73,7 @@ def scrape_matches(pages=1):
     return all_matches
 
 if __name__ == "__main__":
-    matches = scrape_matches(pages=2)
+    matches = scrape_matches(pages=81)
     with open("matches.json", "w", encoding="utf-8") as f:
         json.dump(matches, f, indent=2, ensure_ascii=False)
     print(f"Saved {len(matches)} matches to matches.json")
